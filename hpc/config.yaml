@@ -1,0 +1,91 @@
+# ================================================================
+# config.yaml — Transboundary Opera Pipeline Configuration
+# ================================================================
+# Fill in all values marked TODO before running the pipeline.
+# ================================================================
+
+# ── CSC / Mahti settings ────────────────────────────────────────
+csc_project: "project_XXXXXXX"       # TODO: your CSC project number
+allas_bucket: "opera-pipeline"        # TODO: your Allas bucket name
+
+# Path to the repo on Mahti (after cloning)
+repo_path: "/scratch/project_XXXXXXX/YOUR_USERNAME/transboundary_opera"
+
+# Path to shapefile on Mahti (after a-get from Allas)
+shapefile: "/scratch/project_XXXXXXX/YOUR_USERNAME/transboundary_opera/TBA_full.shp"
+
+# ── Container ───────────────────────────────────────────────────
+# Key in Allas where the .sif file lives
+container_object: "container/transboundary_opera.sif"
+
+# ── OPERA product settings ──────────────────────────────────────
+opera_version: 1.1
+start_date: "20200101"
+end_date: "20221231"
+
+# ── Processing resources ────────────────────────────────────────
+n_workers: 16          # must match --cpus-per-task in SLURM frame job
+chunk_size: 50         # run2 chunk size — lower = safer memory usage
+download_workers: 5    # parallel S3 download workers in run1
+
+# ── SLURM resources ─────────────────────────────────────────────
+slurm:
+  frame_job:
+    partition: "medium"
+    cpus: 16
+    mem: "128G"
+    time: "08:00:00"
+    nvme_gb: 500        # local NVMe scratch size in GB
+
+  decompose_job:
+    partition: "medium"
+    cpus: 8
+    mem: "64G"
+    time: "02:00:00"
+    nvme_gb: 200
+
+  cog_job:
+    partition: "medium"
+    cpus: 4
+    mem: "32G"
+    time: "01:00:00"
+    nvme_gb: 100
+
+# ── Reference point lookup (lat lon per aquifer) ────────────────
+# These MUST be filled in by the geoscientist.
+# Each value is a stable ground coordinate within the aquifer extent.
+# Format: "LAT LON" (space-separated, no brackets)
+# ----------------------------------------------------------------
+ref_lalo:
+  N015: "TODO"    # Hueco-Tularosa Bolson — get from geoscientist
+  N014: "TODO"    # Conejos-Medanos / Mesilla Bolson
+  N012: "TODO"    # Nogales-Rio Santa Cruz Aq.
+  N013: "TODO"    # Rio San Pedro Aq.
+  N018: "TODO"    # Las Palmas / Mimbres Basin
+  N025: "TODO"    # Laguna Salada / Coyote Wells
+  N026: "TODO"    # Valle de Mexicali / Yuma-Imperial
+  N029: "TODO"    # Cabeza Prieta Mountains
+  N031: "TODO"    # Sonoyta-Puerto Penasco
+  N045: "TODO"    # Rio Altar Aq.
+  N046: "TODO"    # Elenita-Huachuca Basin
+  N050: "TODO"    # Arroyo San Bernardino
+  N051: "TODO"    # Guadalupe Mountains
+  N052: "TODO"    # Animas Basin
+  N053: "TODO"    # Janos Aq. / Playas Basin
+  N060: "TODO"    # Eagle Mountains
+  N061: "TODO"    # Green River Valley Bolson
+  N062: "TODO"    # Presidio Bolson
+  N063: "TODO"    # Redford Bolson
+  N068: "TODO"    # Edwards Aq.
+  N070: "TODO"    # Serrania del Burro Aq.
+  N075: "TODO"    # Presa La Amistad
+  N076: "TODO"    # Allende-Piedras Negras
+  N077: "TODO"    # Upson Fm
+  N079: "TODO"    # Olmos Fm
+  N080: "TODO"    # Escondido Fm
+  N086: "TODO"    # Yegua-Jackson Aq.
+  N088: "TODO"    # BRB / Gulf Coast Aq.
+  N008: "TODO"    # Tijuana - San Diego Aq.
+  N024: "TODO"    # La Rumorosa - Tecate
+  # Add remaining aquifer codes as needed
+  # Full list of 72 CODE_2021 values in TBA_full.shp
