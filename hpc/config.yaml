@@ -12,7 +12,7 @@ allas_bucket: "transboundry-opera-bucket"
 repo_path: "/scratch/project_2019354/pmahmood/Transboundary_Opera"
 
 # Path to shapefile on Mahti (after a-get from Allas)
-shapefile: "/scratch/project_2019354/pmahmood/Transboundary_Opera/TBA_full.shp"
+shapefile: "/scratch/project_2019354/pmahmood/Transboundary_Opera/raw_data/TBA_full.shp"
 
 # ── Container ───────────────────────────────────────────────────
 # Key in Allas where the .sif file lives

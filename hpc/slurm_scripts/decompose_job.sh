@@ -20,7 +20,7 @@ set -euo pipefail
 
 # ── Job parameters ────────────────────────────────────────────
 AQUIFER="{AQUIFER}"
-FRAMES=({FRAMES})     # array of frame IDs e.g. (5124 5125 14878 14879 34478)
+FRAMES=({FRAMES})
 REPO="{REPO}"
 BUCKET="{BUCKET}"
 
@@ -36,8 +36,8 @@ module load allas
 allas-conf --silent
 
 # ── Skip if already done ──────────────────────────────────────
-# Check if any decomposition output already exists
-DECOMP_COUNT=$(a-list "$BUCKET/$AQUIFER/" 2>/dev/null | grep -c "Defo.h5" || true)
+# FIX: decomposer.py produces *_dhorz.h5 and *_dvert.h5, not *Defo.h5
+DECOMP_COUNT=$(a-list "$BUCKET/$AQUIFER/" 2>/dev/null | grep -cE "_dhorz\.h5|_dvert\.h5" || true)
 if [ "$DECOMP_COUNT" -gt 0 ]; then
     echo "Decomposition outputs already in Allas ($DECOMP_COUNT files) — skipping."
     exit 0
@@ -62,7 +62,6 @@ for FRAME in "${FRAMES[@]}"; do
     a-get "$BUCKET/$AQUIFER/$FRAME/mintpy/" \
         -C "$SCRATCH/$AQUIFER/$FRAME/mintpy/"
 
-    # Verify key files exist
     if [ ! -f "$SCRATCH/$AQUIFER/$FRAME/mintpy/timeseries.h5" ]; then
         echo "  ERROR: timeseries.h5 missing for frame $FRAME"
         exit 1
@@ -85,11 +84,12 @@ apptainer exec \
 # ── Check outputs ─────────────────────────────────────────────
 echo ""
 echo "--- Checking decomposition outputs ---"
-DEFO_FILES=$(find "$SCRATCH/$AQUIFER" -maxdepth 1 -name "*Defo.h5" | sort)
+# FIX: decomposer.py writes *_dhorz.h5 and *_dvert.h5 at the aquifer root
+# Exclude anything inside mintpy/ subdirectories
+DEFO_FILES=$(find "$SCRATCH/$AQUIFER" -maxdepth 1 -name "*.h5" ! -path "*/mintpy/*" | sort)
 if [ -z "$DEFO_FILES" ]; then
-    echo "WARNING: no *Defo.h5 files produced."
+    echo "WARNING: no decomposition .h5 files produced."
     echo "This may be normal if no ascending/descending overlap exists."
-    # Don't exit 1 — this is a valid outcome for some aquifers
 else
     echo "Decomposition outputs:"
     for f in $DEFO_FILES; do
