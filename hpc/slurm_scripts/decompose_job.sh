@@ -17,10 +17,10 @@ AQUIFER="{AQUIFER}"
 FRAMES=({FRAMES})
 REPO="{REPO}"
 BUCKET="{BUCKET}"
+PYTHON="/transboundary_opera/.pixi/envs/operaapp/bin/python"
 
 echo "============================================================"
-echo "Job: $SLURM_JOB_ID — Decomposition for aquifer $AQUIFER"
-echo "Frames: ${FRAMES[*]}"
+echo "Job: $SLURM_JOB_ID — Decomposition for $AQUIFER"
 echo "Node: $(hostname) | Started: $(date -u)"
 echo "============================================================"
 
@@ -30,69 +30,45 @@ allas-conf --silent
 # ── Skip if already done ──────────────────────────────────────
 DECOMP_COUNT=$(a-list "$BUCKET/$AQUIFER/" 2>/dev/null | grep -cE "_dhorz\.h5|_dvert\.h5" || true)
 if [ "$DECOMP_COUNT" -gt 0 ]; then
-    echo "Decomposition outputs already in Allas ($DECOMP_COUNT files) — skipping."
+    echo "Already done — skipping."
     exit 0
 fi
 
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 mkdir -p "$SCRATCH"
 
-# ── Pull container ────────────────────────────────────────────
 a-get "$BUCKET/container/transboundary_opera.sif" -C "$SCRATCH/"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# ── Pull per-frame mintpy outputs from Allas ─────────────────
-echo ""
-echo "--- Pulling per-frame H5 files ---"
+# ── Pull per-frame mintpy outputs ─────────────────────────────
 for FRAME in "${FRAMES[@]}"; do
     mkdir -p "$SCRATCH/$AQUIFER/$FRAME/mintpy"
     a-get "$BUCKET/$AQUIFER/$FRAME/mintpy/" \
         -C "$SCRATCH/$AQUIFER/$FRAME/mintpy/"
-    if [ ! -f "$SCRATCH/$AQUIFER/$FRAME/mintpy/timeseries.h5" ]; then
-        echo "  ERROR: timeseries.h5 missing for frame $FRAME"
-        exit 1
-    fi
+    [ -f "$SCRATCH/$AQUIFER/$FRAME/mintpy/timeseries.h5" ] || \
+        { echo "ERROR: timeseries.h5 missing for frame $FRAME"; exit 1; }
     echo "  ✓ Frame $FRAME"
 done
 
 # ── Run decomposition ─────────────────────────────────────────
-echo ""
-echo "--- Running decomposition ---"
 apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
     "$SIF" \
-    python /repo/src/transboundary_opera/run_decomposition.py \
+    $PYTHON /repo/src/transboundary_opera/run_decomposition.py \
         --aquifer-dir "/work/$AQUIFER"
 
-# ── Check and upload outputs ──────────────────────────────────
-echo ""
-echo "--- Checking outputs ---"
+# ── Upload outputs ────────────────────────────────────────────
 DEFO_FILES=$(find "$SCRATCH/$AQUIFER" -maxdepth 1 -name "*.h5" ! -path "*/mintpy/*" | sort)
-
-if [ -z "$DEFO_FILES" ]; then
-    echo "WARNING: no decomposition files produced (may be normal for single-pass aquifer)."
-else
-    echo "Decomposition outputs:"
-    for f in $DEFO_FILES; do
-        echo "  ✓ $(basename $f) ($(du -sh $f | cut -f1))"
-    done
-
-    echo ""
-    echo "--- Uploading to Allas ---"
+if [ -n "$DEFO_FILES" ]; then
     for f in $DEFO_FILES; do
         FNAME=$(basename "$f")
-        # FIX: slashes go in -b, not --object
-        a-put "$f" \
-            -b "$BUCKET/$AQUIFER" \
-            --object "$FNAME" \
-            --nc
-        echo "  Uploaded: $BUCKET/$AQUIFER/$FNAME"
+        a-put "$f" -b "$BUCKET/$AQUIFER" --object "$FNAME" --nc
+        echo "  Uploaded: $FNAME"
     done
+else
+    echo "No decomposition files produced (single-pass aquifer)."
 fi
 
 rm -rf "$SCRATCH"
-echo ""
-echo "============================================================"
 echo "Decomposition for $AQUIFER complete: $(date -u)"
-echo "============================================================"

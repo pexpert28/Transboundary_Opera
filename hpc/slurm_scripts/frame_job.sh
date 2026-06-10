@@ -21,6 +21,7 @@ OPERA_VERSION="{OPERA_VERSION}"
 DL_WORKERS="{DL_WORKERS}"
 REPO="{REPO}"
 BUCKET="{BUCKET}"
+PYTHON="/transboundary_opera/.pixi/envs/operaapp/bin/python"
 
 echo "============================================================"
 echo "Job: $SLURM_JOB_ID  |  Aquifer: $AQUIFER  |  Frame: $FRAME_ID"
@@ -37,7 +38,6 @@ if a-check "$BUCKET/$AQUIFER/$FRAME_ID/mintpy/velocity.h5" 2>/dev/null; then
     exit 0
 fi
 
-# ── Local scratch matching what process_frame.py expects ─────
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 FRAME_DIR="$SCRATCH/data/$AQUIFER/$FRAME_ID"
 mkdir -p "$FRAME_DIR/subset-ncs" "$FRAME_DIR/orbit_data" "$FRAME_DIR/geom_data"
@@ -45,8 +45,7 @@ mkdir -p "$FRAME_DIR/subset-ncs" "$FRAME_DIR/orbit_data" "$FRAME_DIR/geom_data"
 echo "Scratch: $SCRATCH"
 echo "Available disk: $(df -h $LOCAL_SCRATCH | tail -1)"
 
-# ── Pull container from Allas ─────────────────────────────────
-echo "Pulling container..."
+# ── Pull container ────────────────────────────────────────────
 a-get "$BUCKET/container/transboundary_opera.sif" -C "$SCRATCH/"
 SIF="$SCRATCH/transboundary_opera.sif"
 
@@ -57,7 +56,7 @@ apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
     "$SIF" \
-    python /repo/src/transboundary_opera/run1_download_DISP_S1_Static.py \
+    $PYTHON /repo/src/transboundary_opera/run1_download_DISP_S1_Static.py \
         --frameID    "$FRAME_ID" \
         --version    "$OPERA_VERSION" \
         --startDate  "$START_DATE" \
@@ -81,7 +80,7 @@ apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
     "$SIF" \
-    python /repo/code/process_data/process_frame.py \
+    $PYTHON /repo/code/process_data/process_frame.py \
         --data-dir   "/work/data" \
         --aquifer    "$AQUIFER" \
         --frame      "$FRAME_ID" \
@@ -102,7 +101,6 @@ for f in timeseries.h5 velocity.h5 geometryGeo.h5 avgSpatialCoh.h5; do
 done
 
 # ── Upload mintpy/ to Allas ───────────────────────────────────
-# FIX: slashes go in -b, not --object
 echo ""
 echo "--- Uploading to Allas ---"
 a-put "$FRAME_DIR/mintpy/" \
