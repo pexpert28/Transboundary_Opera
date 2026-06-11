@@ -87,34 +87,45 @@ def discover_frames(shapefile: str, aquifer_code: str) -> list:
 # ── State tracking ─────────────────────────────────────────────
 
 def load_state(cfg: dict, aquifer_code: str) -> dict:
-    bucket = cfg["allas_bucket"]
-    key = f"pipeline_state/{aquifer_code}_state.json"
-    result = subprocess.run(
-        ["a-check", f"{bucket}/{key}"], capture_output=True
-    )
-    if result.returncode != 0:
-        return {"aquifer": aquifer_code, "frames": {},
-                "decomposition": {"status": "pending"},
-                "cog": {"status": "pending"}}
-    tmp = tempfile.mktemp(suffix=".json")
-    subprocess.run(
-        ["a-get", f"{bucket}/{key}", "-C", str(Path(tmp).parent)],
-        check=True, capture_output=True
-    )
-    with open(tmp) as f:
-        return json.load(f)
+    """Pull state JSON from Allas. Returns empty state if not found or unavailable."""
+    empty = {"aquifer": aquifer_code, "frames": {},
+             "decomposition": {"status": "pending"},
+             "cog": {"status": "pending"}}
+    try:
+        bucket = cfg["allas_bucket"]
+        key = f"pipeline_state/{aquifer_code}_state.json"
+        result = subprocess.run(
+            ["a-check", f"{bucket}/{key}"], capture_output=True
+        )
+        if result.returncode != 0:
+            return empty
+        tmp = tempfile.mktemp(suffix=".json")
+        subprocess.run(
+            ["a-get", f"{bucket}/{key}", "-C", str(Path(tmp).parent)],
+            check=True, capture_output=True
+        )
+        with open(tmp) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # a-check/a-get not in PATH — Allas module not loaded, return empty state
+        return empty
 
 
 def save_state(cfg: dict, aquifer_code: str, state: dict):
-    tmp = tempfile.mktemp(suffix=".json")
-    with open(tmp, "w") as f:
-        json.dump(state, f, indent=2)
-    subprocess.run(
-        ["a-put", tmp, "-b", cfg["allas_bucket"],
-         "--object", f"pipeline_state/{aquifer_code}_state.json"],
-        check=True, capture_output=True
-    )
-    Path(tmp).unlink(missing_ok=True)
+    """Push state JSON to Allas. Silently skips if Allas not available."""
+    try:
+        tmp = tempfile.mktemp(suffix=".json")
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=2)
+        subprocess.run(
+            ["a-put", tmp, "-b",
+             f"{cfg['allas_bucket']}/pipeline_state",
+             "--object", f"{aquifer_code}_state.json"],
+            check=True, capture_output=True
+        )
+        Path(tmp).unlink(missing_ok=True)
+    except FileNotFoundError:
+        pass  # Allas not available, skip state saving
 
 
 # ── SLURM script generation ────────────────────────────────────
