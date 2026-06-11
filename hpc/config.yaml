@@ -31,21 +31,21 @@ download_workers: 5     # parallel S3 download workers
 # ── SLURM resources ─────────────────────────────────────────────
 slurm:
   frame_job:
-    partition: "medium"
+    partition: "small"
     cpus: 8
     mem: "64G"
     time: "12:00:00"
     nvme_gb: 600        # .nc files are large — give plenty of headroom
 
   decompose_job:
-    partition: "medium"
+    partition: "small"
     cpus: 8
     mem: "64G"
     time: "02:00:00"
     nvme_gb: 200
 
   cog_job:
-    partition: "medium"
+    partition: "small"
     cpus: 4
     mem: "32G"
     time: "01:00:00"
