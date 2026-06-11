@@ -112,21 +112,19 @@ def load_state(cfg: dict, aquifer_code: str) -> dict:
 
 
 def save_state(cfg: dict, aquifer_code: str, state: dict):
-    """Push state JSON to Allas. Silently skips if Allas not available."""
+    tmp = tempfile.mktemp(suffix=".json")
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
     try:
-        tmp = tempfile.mktemp(suffix=".json")
-        with open(tmp, "w") as f:
-            json.dump(state, f, indent=2)
         subprocess.run(
-            ["a-put", tmp, "-b",
-             f"{cfg['allas_bucket']}/pipeline_state",
-             "--object", f"{aquifer_code}_state.json"],
+            ["s3cmd", "put", tmp,
+             f"s3://{cfg['allas_bucket']}/pipeline_state/{aquifer_code}_state.json"],
             check=True, capture_output=True
         )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print(f"  Warning: could not save state to Allas (non-fatal)")
+    finally:
         Path(tmp).unlink(missing_ok=True)
-    except FileNotFoundError:
-        pass  # Allas not available, skip state saving
-
 
 # ── SLURM script generation ────────────────────────────────────
 
