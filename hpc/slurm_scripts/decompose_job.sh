@@ -25,32 +25,39 @@ echo "Node: $(hostname) | Started: $(date -u)"
 echo "============================================================"
 
 module load allas
-allas-conf --silent
 
 # ── Skip if already done ──────────────────────────────────────
-DECOMP_COUNT=$(a-list "$BUCKET/$AQUIFER/" 2>/dev/null | grep -cE "_dhorz\.h5|_dvert\.h5" || true)
+DECOMP_COUNT=$(s3cmd ls "s3://$BUCKET/$AQUIFER/" 2>/dev/null | grep -cE "_dhorz\.h5|_dvert\.h5" || true)
 if [ "$DECOMP_COUNT" -gt 0 ]; then
-    echo "Already done — skipping."
+    echo "Already done ($DECOMP_COUNT files) — skipping."
     exit 0
 fi
 
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 mkdir -p "$SCRATCH"
 
-a-get "$BUCKET/container/transboundary_opera.sif" -C "$SCRATCH/"
+# ── Pull container ────────────────────────────────────────────
+s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
 # ── Pull per-frame mintpy outputs ─────────────────────────────
+echo ""
+echo "--- Pulling per-frame H5 files ---"
 for FRAME in "${FRAMES[@]}"; do
     mkdir -p "$SCRATCH/$AQUIFER/$FRAME/mintpy"
-    a-get "$BUCKET/$AQUIFER/$FRAME/mintpy/" \
-        -C "$SCRATCH/$AQUIFER/$FRAME/mintpy/"
-    [ -f "$SCRATCH/$AQUIFER/$FRAME/mintpy/timeseries.h5" ] || \
-        { echo "ERROR: timeseries.h5 missing for frame $FRAME"; exit 1; }
+    s3cmd get --recursive \
+        "s3://$BUCKET/$AQUIFER/$FRAME/mintpy/" \
+        "$SCRATCH/$AQUIFER/$FRAME/mintpy/"
+    if [ ! -f "$SCRATCH/$AQUIFER/$FRAME/mintpy/timeseries.h5" ]; then
+        echo "  ERROR: timeseries.h5 missing for frame $FRAME"
+        exit 1
+    fi
     echo "  ✓ Frame $FRAME"
 done
 
 # ── Run decomposition ─────────────────────────────────────────
+echo ""
+echo "--- Running decomposition ---"
 apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
@@ -61,9 +68,11 @@ apptainer exec \
 # ── Upload outputs ────────────────────────────────────────────
 DEFO_FILES=$(find "$SCRATCH/$AQUIFER" -maxdepth 1 -name "*.h5" ! -path "*/mintpy/*" | sort)
 if [ -n "$DEFO_FILES" ]; then
+    echo ""
+    echo "--- Uploading decomposition outputs ---"
     for f in $DEFO_FILES; do
         FNAME=$(basename "$f")
-        a-put "$f" -b "$BUCKET/$AQUIFER" --object "$FNAME" --nc
+        s3cmd put "$f" "s3://$BUCKET/$AQUIFER/$FNAME"
         echo "  Uploaded: $FNAME"
     done
 else
@@ -71,4 +80,7 @@ else
 fi
 
 rm -rf "$SCRATCH"
+echo ""
+echo "============================================================"
 echo "Decomposition for $AQUIFER complete: $(date -u)"
+echo "============================================================"

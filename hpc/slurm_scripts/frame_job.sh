@@ -29,11 +29,11 @@ echo "Date range: $START_DATE → $END_DATE"
 echo "Node: $(hostname) | Started: $(date -u)"
 echo "============================================================"
 
+# s3cmd reads permanent credentials from ~/.s3cfg — no token expiry
 module load allas
-allas-conf --silent
 
 # ── Skip if already done ──────────────────────────────────────
-if a-check "$BUCKET/$AQUIFER/$FRAME_ID/mintpy/velocity.h5" 2>/dev/null; then
+if s3cmd ls "s3://$BUCKET/$AQUIFER/$FRAME_ID/mintpy/velocity.h5" 2>/dev/null | grep -q "velocity.h5"; then
     echo "Frame $FRAME_ID already in Allas — skipping."
     exit 0
 fi
@@ -46,10 +46,11 @@ echo "Scratch: $SCRATCH"
 echo "Available disk: $(df -h $LOCAL_SCRATCH | tail -1)"
 
 # ── Pull container ────────────────────────────────────────────
-a-get "$BUCKET/container/transboundary_opera.sif" -C "$SCRATCH/"
+echo "Pulling container..."
+s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# ── Step 1: Download .nc files into subset-ncs/ ───────────────
+# ── Step 1: Download .nc files ────────────────────────────────
 echo ""
 echo "--- Step 1/2: Downloading DISP-S1 .nc files ---"
 apptainer exec \
@@ -103,11 +104,10 @@ done
 # ── Upload mintpy/ to Allas ───────────────────────────────────
 echo ""
 echo "--- Uploading to Allas ---"
-a-put "$FRAME_DIR/mintpy/" \
-    -b "$BUCKET/$AQUIFER/$FRAME_ID/mintpy" \
-    --nc
+s3cmd put --recursive "$FRAME_DIR/mintpy/" \
+    "s3://$BUCKET/$AQUIFER/$FRAME_ID/mintpy/"
 
-echo "Uploaded: $BUCKET/$AQUIFER/$FRAME_ID/mintpy/"
+echo "Uploaded: s3://$BUCKET/$AQUIFER/$FRAME_ID/mintpy/"
 rm -rf "$SCRATCH"
 
 echo ""

@@ -25,9 +25,9 @@ echo "Node: $(hostname) | Started: $(date -u)"
 echo "============================================================"
 
 module load allas
-allas-conf --silent
 
-if a-check "$BUCKET/$AQUIFER/cog/velocity_mosaic_cog.tif" 2>/dev/null; then
+# ── Skip if already done ──────────────────────────────────────
+if s3cmd ls "s3://$BUCKET/$AQUIFER/cog/velocity_mosaic_cog.tif" 2>/dev/null | grep -q "velocity_mosaic_cog.tif"; then
     echo "Already done — skipping."
     exit 0
 fi
@@ -35,29 +35,34 @@ fi
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 mkdir -p "$SCRATCH/$AQUIFER/cog"
 
-a-get "$BUCKET/container/transboundary_opera.sif" -C "$SCRATCH/"
+s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
+# ── Pull velocity.h5 per frame ────────────────────────────────
 for FRAME in "${FRAMES[@]}"; do
     mkdir -p "$SCRATCH/$AQUIFER/$FRAME/mintpy"
-    a-get "$BUCKET/$AQUIFER/$FRAME/mintpy/velocity.h5" \
-        -C "$SCRATCH/$AQUIFER/$FRAME/mintpy/"
+    s3cmd get \
+        "s3://$BUCKET/$AQUIFER/$FRAME/mintpy/velocity.h5" \
+        "$SCRATCH/$AQUIFER/$FRAME/mintpy/velocity.h5"
 done
 
-a-list "$BUCKET/$AQUIFER/" 2>/dev/null \
+# ── Pull decomposition files ──────────────────────────────────
+s3cmd ls "s3://$BUCKET/$AQUIFER/" 2>/dev/null \
     | grep -E "_dhorz\.h5|_dvert\.h5" \
+    | awk '{print $4}' \
     | while read -r obj; do
         FNAME=$(basename "$obj")
-        a-get "$BUCKET/$AQUIFER/$FNAME" -C "$SCRATCH/$AQUIFER/"
+        s3cmd get "$obj" "$SCRATCH/$AQUIFER/$FNAME"
     done || true
 
+# ── Pull shapefile ────────────────────────────────────────────
 mkdir -p "$SCRATCH/shapefiles"
 for EXT in shp dbf shx prj cpg; do
-    a-get "$BUCKET/shapefiles/TBA_full.$EXT" \
-        -C "$SCRATCH/shapefiles/" 2>/dev/null || true
+    s3cmd get "s3://$BUCKET/shapefiles/TBA_full.$EXT" \
+        "$SCRATCH/shapefiles/TBA_full.$EXT" 2>/dev/null || true
 done
 
-# NOTE: run_cog_mosaic.py is Phase 4 — to be implemented
+# ── Run COG mosaic (Phase 4 — to be implemented) ─────────────
 apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
@@ -68,9 +73,10 @@ apptainer exec \
         --shapefile    "/work/shapefiles/TBA_full.shp" \
         --outdir       "/work/$AQUIFER/cog"
 
-a-put "$SCRATCH/$AQUIFER/cog/" \
-    -b "$BUCKET/$AQUIFER/cog" \
-    --nc
+# ── Upload COG outputs ────────────────────────────────────────
+s3cmd put --recursive \
+    "$SCRATCH/$AQUIFER/cog/" \
+    "s3://$BUCKET/$AQUIFER/cog/"
 
 rm -rf "$SCRATCH"
 echo "COG mosaic for $AQUIFER complete: $(date -u)"
