@@ -20,7 +20,13 @@ END_DATE="{END_DATE}"
 DL_WORKERS="{DL_WORKERS}"
 REPO="{REPO}"
 BUCKET="{BUCKET}"
-PYTHON="/transboundary_opera/.pixi/envs/operaapp/bin/python"
+
+# Python inside Apptainer container (for process_frame.py)
+PYTHON_CONTAINER="/transboundary_opera/.pixi/envs/operaapp/bin/python"
+
+# Python on the host via pixi environment (for download_frame.py)
+# Running outside container so ~/.netrc is readable by all subprocess workers
+PYTHON_HOST="$REPO/.pixi/envs/operaapp/bin/python"
 
 echo "============================================================"
 echo "Job: $SLURM_JOB_ID  |  Aquifer: $AQUIFER  |  Frame: $FRAME_ID"
@@ -38,61 +44,32 @@ fi
 
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 FRAME_DIR="$SCRATCH/data/$AQUIFER/$FRAME_ID"
-mkdir -p "$FRAME_DIR" "$SCRATCH/cache" "$SCRATCH/home"
+mkdir -p "$FRAME_DIR" "$SCRATCH/cache"
 
 echo "Scratch: $SCRATCH"
 echo "Available disk: $(df -h $LOCAL_SCRATCH | tail -1)"
 
-# ── Pull container ────────────────────────────────────────────
+# ── Pull container (needed for process_frame.py step) ─────────
 echo "Pulling container..."
 s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
     "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# ── Set up .netrc inside writable scratch ─────────────────────
-# ProcessPoolExecutor child processes inherit filesystem, not just env vars.
-# Writing .netrc to scratch and setting HOME=/work/home makes it visible
-# to all processes inside the container (including subprocess workers).
-EARTHDATA_USER=$(awk '/urs\.earthdata\.nasa\.gov/{
-    for(i=1;i<=NF;i++) if($i=="login") print $(i+1)
-}' ~/.netrc)
-
-EARTHDATA_PASS=$(awk '/urs\.earthdata\.nasa\.gov/{
-    for(i=1;i<=NF;i++) if($i=="password") print $(i+1)
-}' ~/.netrc)
-
-if [ -z "$EARTHDATA_USER" ] || [ -z "$EARTHDATA_PASS" ]; then
-    echo "ERROR: Earthdata credentials not found in ~/.netrc"
-    exit 1
-fi
-
-# Write .netrc to scratch — readable by all container processes
-printf 'machine urs.earthdata.nasa.gov login %s password %s\n' \
-    "$EARTHDATA_USER" "$EARTHDATA_PASS" > "$SCRATCH/home/.netrc"
-chmod 600 "$SCRATCH/home/.netrc"
-echo "Earthdata credentials written for user: $EARTHDATA_USER"
-
-# Apptainer args: set HOME to writable scratch so .netrc is found
-# and XDG_CACHE_HOME so pooch doesn't try to write to read-only /users
-APPTAINER_ARGS="--bind $REPO:/repo \
-    --bind $SCRATCH:/work \
-    --env HOME=/work/home \
-    --env XDG_CACHE_HOME=/work/cache"
-
-# ── Step 1: Download .nc files ────────────────────────────────
+# ── Step 1: Download .nc files (runs OUTSIDE container) ───────
+# Uses pixi Python on host — ~/.netrc is readable by all processes
+# No container = no HOME restrictions = Earthdata auth works
 echo ""
-echo "--- Step 1/2: Downloading DISP-S1 .nc files ---"
+echo "--- Step 1/2: Downloading DISP-S1 .nc files (host Python) ---"
 
 set +e
-apptainer exec $APPTAINER_ARGS "$SIF" \
-    $PYTHON /repo/hpc/download_frame.py \
-        --aquifer    "$AQUIFER" \
-        --frame      "$FRAME_ID" \
-        --output-dir "/work/data/$AQUIFER/$FRAME_ID" \
-        --shapefile  "/repo/raw_data/TBA_full.shp" \
-        --start      "$START_DATE" \
-        --end        "$END_DATE" \
-        --workers    "$DL_WORKERS"
+"$PYTHON_HOST" "$REPO/hpc/download_frame.py" \
+    --aquifer    "$AQUIFER" \
+    --frame      "$FRAME_ID" \
+    --output-dir "$FRAME_DIR" \
+    --shapefile  "$REPO/raw_data/TBA_full.shp" \
+    --start      "$START_DATE" \
+    --end        "$END_DATE" \
+    --workers    "$DL_WORKERS"
 DOWNLOAD_EXIT=$?
 set -e
 
@@ -109,11 +86,17 @@ NC_COUNT=$(find "$FRAME_DIR/subset-ncs" -name "*.nc" 2>/dev/null | wc -l)
 echo "Downloaded $NC_COUNT .nc files"
 echo "Disk after download: $(du -sh $SCRATCH/data | cut -f1)"
 
-# ── Step 2: Process with process_frame.py ────────────────────
+# ── Step 2: Process with process_frame.py (inside container) ──
+# process_frame.py needs MintPy + opera_utils with specific versions
+# from the container. Data directory is bind-mounted at /work/data.
 echo ""
-echo "--- Step 2/2: Processing with process_frame.py ---"
-apptainer exec $APPTAINER_ARGS "$SIF" \
-    $PYTHON /repo/code/process_data/process_frame.py \
+echo "--- Step 2/2: Processing with process_frame.py (container) ---"
+apptainer exec \
+    --bind "$REPO:/repo" \
+    --bind "$SCRATCH:/work" \
+    --env XDG_CACHE_HOME=/work/cache \
+    "$SIF" \
+    $PYTHON_CONTAINER /repo/code/process_data/process_frame.py \
         --data-dir   "/work/data" \
         --aquifer    "$AQUIFER" \
         --frame      "$FRAME_ID" \
