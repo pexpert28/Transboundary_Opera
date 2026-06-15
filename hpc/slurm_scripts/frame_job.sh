@@ -17,7 +17,6 @@ AQUIFER="{AQUIFER}"
 FRAME_ID="{FRAME_ID}"
 START_DATE="{START_DATE}"
 END_DATE="{END_DATE}"
-OPERA_VERSION="{OPERA_VERSION}"
 DL_WORKERS="{DL_WORKERS}"
 REPO="{REPO}"
 BUCKET="{BUCKET}"
@@ -29,7 +28,6 @@ echo "Date range: $START_DATE → $END_DATE"
 echo "Node: $(hostname) | Started: $(date -u)"
 echo "============================================================"
 
-# s3cmd reads permanent credentials from ~/.s3cfg — no token expiry
 module load allas
 
 # ── Skip if already done ──────────────────────────────────────
@@ -40,41 +38,50 @@ fi
 
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 FRAME_DIR="$SCRATCH/data/$AQUIFER/$FRAME_ID"
-mkdir -p "$FRAME_DIR/subset-ncs" "$FRAME_DIR/orbit_data" "$FRAME_DIR/geom_data"
+mkdir -p "$FRAME_DIR"
 
 echo "Scratch: $SCRATCH"
 echo "Available disk: $(df -h $LOCAL_SCRATCH | tail -1)"
 
 # ── Pull container ────────────────────────────────────────────
 echo "Pulling container..."
-s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" "$SCRATCH/transboundary_opera.sif"
+s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
+    "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# ── Step 1: Download .nc files ────────────────────────────────
+# ── Step 1: Download .nc files using opera_utils._download ────
+# Uses the same method as get_opera_data.py — handles v1.1 correctly
+# Downloads to FRAME_DIR/subset-ncs/ (required by process_frame.py)
 echo ""
 echo "--- Step 1/2: Downloading DISP-S1 .nc files ---"
 apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
     "$SIF" \
-    $PYTHON /repo/src/transboundary_opera/run1_download_DISP_S1_Static.py \
-        --frameID    "$FRAME_ID" \
-        --version    "$OPERA_VERSION" \
-        --startDate  "$START_DATE" \
-        --endDate    "$END_DATE" \
-        --dispDir    "/work/data/$AQUIFER/$FRAME_ID/subset-ncs" \
-        --staticDir  "/work/data/$AQUIFER/$FRAME_ID/orbit_data" \
-        --geomDir    "/work/data/$AQUIFER/$FRAME_ID/geom_data" \
-        --nWorkers   "$DL_WORKERS"
+    $PYTHON /repo/hpc/download_frame.py \
+        --aquifer    "$AQUIFER" \
+        --frame      "$FRAME_ID" \
+        --output-dir "/work/data/$AQUIFER/$FRAME_ID" \
+        --shapefile  "/repo/raw_data/TBA_full.shp" \
+        --start      "$START_DATE" \
+        --end        "$END_DATE" \
+        --workers    "$DL_WORKERS"
 
-NC_COUNT=$(find "$FRAME_DIR/subset-ncs" -name "*.nc" | wc -l)
+NC_COUNT=$(find "$FRAME_DIR/subset-ncs" -name "*.nc" 2>/dev/null | wc -l)
 echo "Downloaded $NC_COUNT .nc files"
 if [ "$NC_COUNT" -eq 0 ]; then
     echo "ERROR: No .nc files downloaded."
     exit 1
 fi
+echo "Disk after download: $(du -sh $SCRATCH/data | cut -f1)"
 
 # ── Step 2: Process with process_frame.py ────────────────────
+# process_frame.py handles:
+#   - reformat_stack (solid earth + ionospheric corrections)
+#   - static layer download
+#   - geometry build
+#   - MintPy HDF5 conversion
+#   - auto reference point from max coherence
 echo ""
 echo "--- Step 2/2: Processing with process_frame.py ---"
 apptainer exec \
