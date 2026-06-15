@@ -2,19 +2,46 @@
 """
 download_frame.py — Download OPERA DISP-S1 .nc files for a single frame.
 
+Reads Earthdata credentials from ~/.netrc in the main process and sets
+EARTHDATA_USERNAME / EARTHDATA_PASSWORD as environment variables before
+calling run_download(). This ensures ProcessPoolExecutor child processes
+inherit them regardless of spawn/fork mode or filesystem mount differences.
+
 Exit codes:
   0 = success (files downloaded, or already done)
   2 = no spatial overlap between aquifer and frame (skip gracefully)
-  1 = download failed
+  1 = download error
 """
 
 import argparse
+import netrc as netrc_module
+import os
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import geopandas as gpd
+
+def ensure_earthdata_credentials():
+    """Read ~/.netrc and set env vars so all child processes can find them."""
+    if os.environ.get('EARTHDATA_USERNAME') and os.environ.get('EARTHDATA_PASSWORD'):
+        print(f"Earthdata credentials from env vars: {os.environ['EARTHDATA_USERNAME']}")
+        return
+
+    try:
+        n = netrc_module.netrc()
+        auth = n.authenticators('urs.earthdata.nasa.gov')
+        if auth and auth[0] and auth[2]:
+            os.environ['EARTHDATA_USERNAME'] = auth[0]
+            os.environ['EARTHDATA_PASSWORD'] = auth[2]
+            print(f"Earthdata credentials from ~/.netrc: {auth[0]}")
+            return
+    except Exception as e:
+        print(f"Warning: could not read ~/.netrc: {e}")
+
+    print("ERROR: No Earthdata credentials found.")
+    print("Add to ~/.netrc:  machine urs.earthdata.nasa.gov login USER password PASS")
+    sys.exit(1)
 
 
 def create_parser():
@@ -27,15 +54,22 @@ def create_parser():
     p.add_argument("--shapefile",   required=True, type=Path)
     p.add_argument("--start",       required=True, help="YYYYMMDD")
     p.add_argument("--end",         required=True, help="YYYYMMDD")
-    p.add_argument("--workers",     default=8, type=int)
+    p.add_argument("--workers",     default=4, type=int)
     return p
 
 
 def main():
     args = create_parser().parse_args()
 
+    # ── Set credentials FIRST in main process ─────────────────
+    # ProcessPoolExecutor workers inherit env vars from parent via fork.
+    # Reading .netrc here and exporting to env vars guarantees all workers
+    # can authenticate without needing to read .netrc themselves.
+    ensure_earthdata_credentials()
+
     from opera_utils.disp import _download
     from transboundary_opera import displacement_tools as dt
+    import geopandas as gpd
 
     # ── Load shapefile ─────────────────────────────────────────
     gdf = gpd.read_file(args.shapefile)
@@ -55,9 +89,8 @@ def main():
 
     if geom_frames.empty:
         print(f"No geometry found for frame {args.frame} — skipping")
-        sys.exit(2)  # graceful skip
+        sys.exit(2)
 
-    # ── Clip aquifer to frame footprint ───────────────────────
     frame_geom = geom_frames[geom_frames["frame_id"] == args.frame]
     clipped = gpd.clip(
         gpd.GeoSeries([aquifer_geom], crs=gdf.crs),
@@ -66,7 +99,7 @@ def main():
 
     if clipped.empty:
         print(f"No spatial overlap between {args.aquifer} and frame {args.frame} — skipping")
-        sys.exit(2)  # graceful skip, not an error
+        sys.exit(2)
 
     clipped_bbox = clipped.geometry.iloc[0].bounds
     print(f"Clipped bbox: {[round(x, 4) for x in clipped_bbox]}")
@@ -109,7 +142,7 @@ def main():
         sys.exit(1)
 
     done_marker.touch()
-    print(f"Done.")
+    print("Done.")
     sys.exit(0)
 
 
