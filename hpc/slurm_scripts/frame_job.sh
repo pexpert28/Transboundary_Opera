@@ -38,7 +38,7 @@ fi
 
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 FRAME_DIR="$SCRATCH/data/$AQUIFER/$FRAME_ID"
-mkdir -p "$FRAME_DIR" "$SCRATCH/cache"
+mkdir -p "$FRAME_DIR" "$SCRATCH/cache" "$SCRATCH/home"
 
 echo "Scratch: $SCRATCH"
 echo "Available disk: $(df -h $LOCAL_SCRATCH | tail -1)"
@@ -49,9 +49,10 @@ s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
     "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# ── Read Earthdata credentials from ~/.netrc ──────────────────
-# Handles single-line format: machine X login Y password Z
-# Uses awk to safely parse regardless of field positions
+# ── Set up .netrc inside writable scratch ─────────────────────
+# ProcessPoolExecutor child processes inherit filesystem, not just env vars.
+# Writing .netrc to scratch and setting HOME=/work/home makes it visible
+# to all processes inside the container (including subprocess workers).
 EARTHDATA_USER=$(awk '/urs\.earthdata\.nasa\.gov/{
     for(i=1;i<=NF;i++) if($i=="login") print $(i+1)
 }' ~/.netrc)
@@ -62,18 +63,21 @@ EARTHDATA_PASS=$(awk '/urs\.earthdata\.nasa\.gov/{
 
 if [ -z "$EARTHDATA_USER" ] || [ -z "$EARTHDATA_PASS" ]; then
     echo "ERROR: Earthdata credentials not found in ~/.netrc"
-    echo "Expected: machine urs.earthdata.nasa.gov login USER password PASS"
     exit 1
 fi
-echo "Earthdata credentials loaded for user: $EARTHDATA_USER"
 
-# Write to env file — avoids shell escaping issues with special chars in password
-ENV_FILE="$SCRATCH/earthdata.env"
-printf 'EARTHDATA_USERNAME=%s\nEARTHDATA_PASSWORD=%s\nXDG_CACHE_HOME=/work/cache\n' \
-    "$EARTHDATA_USER" "$EARTHDATA_PASS" > "$ENV_FILE"
+# Write .netrc to scratch — readable by all container processes
+printf 'machine urs.earthdata.nasa.gov login %s password %s\n' \
+    "$EARTHDATA_USER" "$EARTHDATA_PASS" > "$SCRATCH/home/.netrc"
+chmod 600 "$SCRATCH/home/.netrc"
+echo "Earthdata credentials written for user: $EARTHDATA_USER"
 
-# Single apptainer command definition used for all steps
-APPTAINER_ARGS="--bind $REPO:/repo --bind $SCRATCH:/work --env-file $ENV_FILE"
+# Apptainer args: set HOME to writable scratch so .netrc is found
+# and XDG_CACHE_HOME so pooch doesn't try to write to read-only /users
+APPTAINER_ARGS="--bind $REPO:/repo \
+    --bind $SCRATCH:/work \
+    --env HOME=/work/home \
+    --env XDG_CACHE_HOME=/work/cache"
 
 # ── Step 1: Download .nc files ────────────────────────────────
 echo ""
