@@ -50,33 +50,37 @@ s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
 SIF="$SCRATCH/transboundary_opera.sif"
 
 # ── Read Earthdata credentials from ~/.netrc ──────────────────
-# Pass as env vars so ProcessPoolExecutor child processes can find them
-# opera_utils checks EARTHDATA_USERNAME + EARTHDATA_PASSWORD
-EARTHDATA_USER=$(grep -A3 'urs.earthdata.nasa.gov' ~/.netrc | grep 'login' | awk '{print $2}')
-EARTHDATA_PASS=$(grep -A3 'urs.earthdata.nasa.gov' ~/.netrc | grep 'password' | awk '{print $2}')
+# Handles single-line format: machine X login Y password Z
+# Uses awk to safely parse regardless of field positions
+EARTHDATA_USER=$(awk '/urs\.earthdata\.nasa\.gov/{
+    for(i=1;i<=NF;i++) if($i=="login") print $(i+1)
+}' ~/.netrc)
+
+EARTHDATA_PASS=$(awk '/urs\.earthdata\.nasa\.gov/{
+    for(i=1;i<=NF;i++) if($i=="password") print $(i+1)
+}' ~/.netrc)
 
 if [ -z "$EARTHDATA_USER" ] || [ -z "$EARTHDATA_PASS" ]; then
     echo "ERROR: Earthdata credentials not found in ~/.netrc"
-    echo "Run: echo 'machine urs.earthdata.nasa.gov login USER password PASS' >> ~/.netrc"
+    echo "Expected: machine urs.earthdata.nasa.gov login USER password PASS"
     exit 1
 fi
 echo "Earthdata credentials loaded for user: $EARTHDATA_USER"
 
-# ── Apptainer command with all required env vars ──────────────
-APPTAINER="apptainer exec
-    --bind $REPO:/repo
-    --bind $SCRATCH:/work
-    --env XDG_CACHE_HOME=/work/cache
-    --env EARTHDATA_USERNAME=$EARTHDATA_USER
-    --env EARTHDATA_PASSWORD=$EARTHDATA_PASS
-    $SIF"
+# Write to env file — avoids shell escaping issues with special chars in password
+ENV_FILE="$SCRATCH/earthdata.env"
+printf 'EARTHDATA_USERNAME=%s\nEARTHDATA_PASSWORD=%s\nXDG_CACHE_HOME=/work/cache\n' \
+    "$EARTHDATA_USER" "$EARTHDATA_PASS" > "$ENV_FILE"
+
+# Single apptainer command definition used for all steps
+APPTAINER_ARGS="--bind $REPO:/repo --bind $SCRATCH:/work --env-file $ENV_FILE"
 
 # ── Step 1: Download .nc files ────────────────────────────────
 echo ""
 echo "--- Step 1/2: Downloading DISP-S1 .nc files ---"
 
 set +e
-$APPTAINER \
+apptainer exec $APPTAINER_ARGS "$SIF" \
     $PYTHON /repo/hpc/download_frame.py \
         --aquifer    "$AQUIFER" \
         --frame      "$FRAME_ID" \
@@ -104,7 +108,7 @@ echo "Disk after download: $(du -sh $SCRATCH/data | cut -f1)"
 # ── Step 2: Process with process_frame.py ────────────────────
 echo ""
 echo "--- Step 2/2: Processing with process_frame.py ---"
-$APPTAINER \
+apptainer exec $APPTAINER_ARGS "$SIF" \
     $PYTHON /repo/code/process_data/process_frame.py \
         --data-dir   "/work/data" \
         --aquifer    "$AQUIFER" \
