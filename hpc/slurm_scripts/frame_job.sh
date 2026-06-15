@@ -38,7 +38,7 @@ fi
 
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 FRAME_DIR="$SCRATCH/data/$AQUIFER/$FRAME_ID"
-mkdir -p "$FRAME_DIR"
+mkdir -p "$FRAME_DIR" "$SCRATCH/cache"
 
 echo "Scratch: $SCRATCH"
 echo "Available disk: $(df -h $LOCAL_SCRATCH | tail -1)"
@@ -49,19 +49,20 @@ s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
     "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
+# XDG_CACHE_HOME redirects pooch/opera_utils burst DB cache
+# to writable scratch instead of read-only /users home directory
+APPTAINER="apptainer exec
+    --bind $REPO:/repo
+    --bind $SCRATCH:/work
+    --env XDG_CACHE_HOME=/work/cache
+    $SIF"
+
 # ── Step 1: Download .nc files ────────────────────────────────
 echo ""
 echo "--- Step 1/2: Downloading DISP-S1 .nc files ---"
 
-# Capture exit code without triggering set -e
-# Exit 0 = downloaded OK
-# Exit 2 = no spatial overlap with this aquifer — skip gracefully
-# Exit 1 = real download error
 set +e
-apptainer exec \
-    --bind "$REPO:/repo" \
-    --bind "$SCRATCH:/work" \
-    "$SIF" \
+$APPTAINER \
     $PYTHON /repo/hpc/download_frame.py \
         --aquifer    "$AQUIFER" \
         --frame      "$FRAME_ID" \
@@ -89,10 +90,7 @@ echo "Disk after download: $(du -sh $SCRATCH/data | cut -f1)"
 # ── Step 2: Process with process_frame.py ────────────────────
 echo ""
 echo "--- Step 2/2: Processing with process_frame.py ---"
-apptainer exec \
-    --bind "$REPO:/repo" \
-    --bind "$SCRATCH:/work" \
-    "$SIF" \
+$APPTAINER \
     $PYTHON /repo/code/process_data/process_frame.py \
         --data-dir   "/work/data" \
         --aquifer    "$AQUIFER" \
