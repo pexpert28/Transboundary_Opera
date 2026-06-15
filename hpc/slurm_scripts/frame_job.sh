@@ -49,12 +49,26 @@ s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
     "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# XDG_CACHE_HOME redirects pooch/opera_utils burst DB cache
-# to writable scratch instead of read-only /users home directory
+# ── Read Earthdata credentials from ~/.netrc ──────────────────
+# Pass as env vars so ProcessPoolExecutor child processes can find them
+# opera_utils checks EARTHDATA_USERNAME + EARTHDATA_PASSWORD
+EARTHDATA_USER=$(grep -A3 'urs.earthdata.nasa.gov' ~/.netrc | grep 'login' | awk '{print $2}')
+EARTHDATA_PASS=$(grep -A3 'urs.earthdata.nasa.gov' ~/.netrc | grep 'password' | awk '{print $2}')
+
+if [ -z "$EARTHDATA_USER" ] || [ -z "$EARTHDATA_PASS" ]; then
+    echo "ERROR: Earthdata credentials not found in ~/.netrc"
+    echo "Run: echo 'machine urs.earthdata.nasa.gov login USER password PASS' >> ~/.netrc"
+    exit 1
+fi
+echo "Earthdata credentials loaded for user: $EARTHDATA_USER"
+
+# ── Apptainer command with all required env vars ──────────────
 APPTAINER="apptainer exec
     --bind $REPO:/repo
     --bind $SCRATCH:/work
     --env XDG_CACHE_HOME=/work/cache
+    --env EARTHDATA_USERNAME=$EARTHDATA_USER
+    --env EARTHDATA_PASSWORD=$EARTHDATA_PASS
     $SIF"
 
 # ── Step 1: Download .nc files ────────────────────────────────
