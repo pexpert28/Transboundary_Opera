@@ -49,11 +49,15 @@ s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
     "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# ── Step 1: Download .nc files using opera_utils._download ────
-# Uses the same method as get_opera_data.py — handles v1.1 correctly
-# Downloads to FRAME_DIR/subset-ncs/ (required by process_frame.py)
+# ── Step 1: Download .nc files ────────────────────────────────
 echo ""
 echo "--- Step 1/2: Downloading DISP-S1 .nc files ---"
+
+# Capture exit code without triggering set -e
+# Exit 0 = downloaded OK
+# Exit 2 = no spatial overlap with this aquifer — skip gracefully
+# Exit 1 = real download error
+set +e
 apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
@@ -66,22 +70,23 @@ apptainer exec \
         --start      "$START_DATE" \
         --end        "$END_DATE" \
         --workers    "$DL_WORKERS"
+DOWNLOAD_EXIT=$?
+set -e
+
+if [ "$DOWNLOAD_EXIT" -eq 2 ]; then
+    echo "Frame $FRAME_ID has no spatial overlap with $AQUIFER — skipping gracefully."
+    rm -rf "$SCRATCH"
+    exit 0
+elif [ "$DOWNLOAD_EXIT" -ne 0 ]; then
+    echo "ERROR: download failed with exit code $DOWNLOAD_EXIT"
+    exit 1
+fi
 
 NC_COUNT=$(find "$FRAME_DIR/subset-ncs" -name "*.nc" 2>/dev/null | wc -l)
 echo "Downloaded $NC_COUNT .nc files"
-if [ "$NC_COUNT" -eq 0 ]; then
-    echo "ERROR: No .nc files downloaded."
-    exit 1
-fi
 echo "Disk after download: $(du -sh $SCRATCH/data | cut -f1)"
 
 # ── Step 2: Process with process_frame.py ────────────────────
-# process_frame.py handles:
-#   - reformat_stack (solid earth + ionospheric corrections)
-#   - static layer download
-#   - geometry build
-#   - MintPy HDF5 conversion
-#   - auto reference point from max coherence
 echo ""
 echo "--- Step 2/2: Processing with process_frame.py ---"
 apptainer exec \
