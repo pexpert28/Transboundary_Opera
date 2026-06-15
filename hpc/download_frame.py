@@ -2,14 +2,9 @@
 """
 download_frame.py — Download OPERA DISP-S1 .nc files for a single frame.
 
-Reads Earthdata credentials from ~/.netrc in the main process and sets
-EARTHDATA_USERNAME / EARTHDATA_PASSWORD as environment variables before
-calling run_download(). This ensures ProcessPoolExecutor child processes
-inherit them regardless of spawn/fork mode or filesystem mount differences.
-
 Exit codes:
   0 = success (files downloaded, or already done)
-  2 = no spatial overlap between aquifer and frame (skip gracefully)
+  2 = no spatial overlap or no products in date range (skip gracefully)
   1 = download error
 """
 
@@ -41,6 +36,7 @@ def ensure_earthdata_credentials():
 
     print("ERROR: No Earthdata credentials found.")
     print("Add to ~/.netrc:  machine urs.earthdata.nasa.gov login USER password PASS")
+    print("Then run: chmod 600 ~/.netrc")
     sys.exit(1)
 
 
@@ -61,10 +57,7 @@ def create_parser():
 def main():
     args = create_parser().parse_args()
 
-    # ── Set credentials FIRST in main process ─────────────────
-    # ProcessPoolExecutor workers inherit env vars from parent via fork.
-    # Reading .netrc here and exporting to env vars guarantees all workers
-    # can authenticate without needing to read .netrc themselves.
+    # Set credentials in main process before ProcessPoolExecutor forks workers
     ensure_earthdata_credentials()
 
     from opera_utils.disp import _download
@@ -125,14 +118,20 @@ def main():
     end_dt   = datetime.strptime(args.end,   "%Y%m%d")
 
     print(f"Downloading frame {args.frame}  {args.start} → {args.end}...")
-    _download.run_download(
-        args.frame,
-        start_datetime=start_dt,
-        end_datetime=end_dt,
-        num_workers=args.workers,
-        output_dir=subset_dir,
-        bbox=clipped_bbox,
-    )
+    try:
+        _download.run_download(
+            args.frame,
+            start_datetime=start_dt,
+            end_datetime=end_dt,
+            num_workers=args.workers,
+            output_dir=subset_dir,
+            bbox=clipped_bbox,
+        )
+    except ValueError as e:
+        # "At least one product is required" — no OPERA data for this frame/period
+        print(f"No OPERA products found for frame {args.frame} in {args.start}–{args.end}: {e}")
+        print("Skipping gracefully.")
+        sys.exit(2)
 
     nc_files = list(subset_dir.glob("*.nc"))
     print(f"Downloaded {len(nc_files)} .nc files")

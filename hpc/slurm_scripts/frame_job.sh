@@ -21,11 +21,7 @@ DL_WORKERS="{DL_WORKERS}"
 REPO="{REPO}"
 BUCKET="{BUCKET}"
 
-# Python inside Apptainer container (for process_frame.py)
 PYTHON_CONTAINER="/transboundary_opera/.pixi/envs/operaapp/bin/python"
-
-# Python on the host via pixi environment (for download_frame.py)
-# Running outside container so ~/.netrc is readable by all subprocess workers
 PYTHON_HOST="$REPO/.pixi/envs/operaapp/bin/python"
 
 echo "============================================================"
@@ -44,20 +40,48 @@ fi
 
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 FRAME_DIR="$SCRATCH/data/$AQUIFER/$FRAME_ID"
-mkdir -p "$FRAME_DIR" "$SCRATCH/cache"
+mkdir -p "$FRAME_DIR" "$SCRATCH/cache" "$SCRATCH/netrc_dir"
 
 echo "Scratch: $SCRATCH"
 echo "Available disk: $(df -h $LOCAL_SCRATCH | tail -1)"
 
-# ── Pull container (needed for process_frame.py step) ─────────
+# ── Pull container ────────────────────────────────────────────
 echo "Pulling container..."
 s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
     "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
-# ── Step 1: Download .nc files (runs OUTSIDE container) ───────
-# Uses pixi Python on host — ~/.netrc is readable by all processes
-# No container = no HOME restrictions = Earthdata auth works
+# ── Prepare .netrc for container use ─────────────────────────
+# asf_search inside the container reads ~/.netrc directly.
+# We write it to scratch and bind-mount it over the home path
+# so both the main process and multiprocessing workers can read it.
+EARTHDATA_USER=$(awk '/urs\.earthdata\.nasa\.gov/{
+    for(i=1;i<=NF;i++) if($i=="login") print $(i+1)
+}' ~/.netrc)
+EARTHDATA_PASS=$(awk '/urs\.earthdata\.nasa\.gov/{
+    for(i=1;i<=NF;i++) if($i=="password") print $(i+1)
+}' ~/.netrc)
+
+if [ -z "$EARTHDATA_USER" ] || [ -z "$EARTHDATA_PASS" ]; then
+    echo "ERROR: Earthdata credentials not found in ~/.netrc"
+    exit 1
+fi
+
+NETRC_SCRATCH="$SCRATCH/netrc_dir/netrc"
+printf 'machine urs.earthdata.nasa.gov login %s password %s\n' \
+    "$EARTHDATA_USER" "$EARTHDATA_PASS" > "$NETRC_SCRATCH"
+chmod 600 "$NETRC_SCRATCH"
+echo "Earthdata credentials staged for: $EARTHDATA_USER"
+
+# Bind-mount the staged .netrc over the home directory's .netrc inside container
+# This makes it visible to asf_search (process_frame.py static download)
+HOME_NETRC="/users/$USER/.netrc"
+APPTAINER_ARGS="--bind $REPO:/repo \
+    --bind $SCRATCH:/work \
+    --bind $NETRC_SCRATCH:$HOME_NETRC:ro \
+    --env XDG_CACHE_HOME=/work/cache"
+
+# ── Step 1: Download .nc files (host Python, outside container) ──
 echo ""
 echo "--- Step 1/2: Downloading DISP-S1 .nc files (host Python) ---"
 
@@ -74,7 +98,7 @@ DOWNLOAD_EXIT=$?
 set -e
 
 if [ "$DOWNLOAD_EXIT" -eq 2 ]; then
-    echo "Frame $FRAME_ID has no spatial overlap with $AQUIFER — skipping gracefully."
+    echo "Frame $FRAME_ID: no data or no overlap — skipping gracefully."
     rm -rf "$SCRATCH"
     exit 0
 elif [ "$DOWNLOAD_EXIT" -ne 0 ]; then
@@ -87,15 +111,9 @@ echo "Downloaded $NC_COUNT .nc files"
 echo "Disk after download: $(du -sh $SCRATCH/data | cut -f1)"
 
 # ── Step 2: Process with process_frame.py (inside container) ──
-# process_frame.py needs MintPy + opera_utils with specific versions
-# from the container. Data directory is bind-mounted at /work/data.
 echo ""
 echo "--- Step 2/2: Processing with process_frame.py (container) ---"
-apptainer exec \
-    --bind "$REPO:/repo" \
-    --bind "$SCRATCH:/work" \
-    --env XDG_CACHE_HOME=/work/cache \
-    "$SIF" \
+apptainer exec $APPTAINER_ARGS "$SIF" \
     $PYTHON_CONTAINER /repo/code/process_data/process_frame.py \
         --data-dir   "/work/data" \
         --aquifer    "$AQUIFER" \
