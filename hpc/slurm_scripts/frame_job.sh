@@ -79,7 +79,9 @@ HOME_NETRC="/users/$USER/.netrc"
 APPTAINER_ARGS="--bind $REPO:/repo \
     --bind $SCRATCH:/work \
     --bind $NETRC_SCRATCH:$HOME_NETRC:ro \
-    --env XDG_CACHE_HOME=/work/cache"
+    --env XDG_CACHE_HOME=/work/cache \
+    --env PATH=/transboundary_opera/.pixi/envs/operaapp/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 
 # ── Step 1: Download .nc files (host Python, outside container) ──
 echo ""
