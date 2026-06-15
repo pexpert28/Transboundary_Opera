@@ -121,8 +121,8 @@ def save_state(cfg: dict, aquifer_code: str, state: dict):
              f"s3://{cfg['allas_bucket']}/pipeline_state/{aquifer_code}_state.json"],
             check=True, capture_output=True
         )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        print(f"  Warning: could not save state to Allas (non-fatal)")
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        print(f"  Warning: could not save state to Allas (non-fatal): {e}")
     finally:
         Path(tmp).unlink(missing_ok=True)
 
