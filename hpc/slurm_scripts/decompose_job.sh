@@ -73,7 +73,9 @@ echo "--- Running decomposition ---"
 apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
+    --bind "$REPO/src/transboundary_opera:/transboundary_opera/src/transboundary_opera:ro" \
     --env XDG_CACHE_HOME=/work/cache \
+    --env MPLCONFIGDIR=/work/cache/matplotlib \
     "$SIF" \
     $PYTHON /repo/src/transboundary_opera/run_decomposition.py \
         --aquifer-dir "/work/$AQUIFER"
