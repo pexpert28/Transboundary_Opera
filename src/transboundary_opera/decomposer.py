@@ -140,7 +140,7 @@ class InSARDecomposer:
 
             coh[i] = readfile.read(paths['coherence'][i], box=box, datasetName='avgSpatialCoh')[0]
             los_inc_angle[i] = readfile.read(paths['geometry'][i], box=box, datasetName='incidenceAngle')[0]
-            los_az_angle[i] = readfile.read(paths['geometry'][i], box=box, datasetName='angleAngle')[0]
+            los_az_angle[i] = readfile.read(paths['geometry'][i], box=box, datasetName='azimuthAngle')[0]
 
             # Read only common dates
             full_data, _ = readfile.read(ts_file, box=box, datasetName=self.ds_name)
