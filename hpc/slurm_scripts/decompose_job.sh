@@ -36,24 +36,36 @@ fi
 SCRATCH="$LOCAL_SCRATCH/$SLURM_JOB_ID"
 mkdir -p "$SCRATCH"
 
-# ── Pull container ────────────────────────────────────────────
-s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" "$SCRATCH/transboundary_opera.sif"
+s3cmd get "s3://$BUCKET/container/transboundary_opera.sif" \
+    "$SCRATCH/transboundary_opera.sif"
 SIF="$SCRATCH/transboundary_opera.sif"
 
 # ── Pull per-frame mintpy outputs ─────────────────────────────
 echo ""
 echo "--- Pulling per-frame H5 files ---"
+PULLED=0
 for FRAME in "${FRAMES[@]}"; do
+    # Some frames are skipped (no spatial overlap) — check Allas first
+    if ! s3cmd ls "s3://$BUCKET/$AQUIFER/$FRAME/mintpy/timeseries.h5" \
+            2>/dev/null | grep -q "timeseries.h5"; then
+        echo "  Frame $FRAME: not in Allas (skipped during processing) — skipping"
+        continue
+    fi
+
     mkdir -p "$SCRATCH/$AQUIFER/$FRAME/mintpy"
     s3cmd get --recursive \
         "s3://$BUCKET/$AQUIFER/$FRAME/mintpy/" \
         "$SCRATCH/$AQUIFER/$FRAME/mintpy/"
-    if [ ! -f "$SCRATCH/$AQUIFER/$FRAME/mintpy/timeseries.h5" ]; then
-        echo "  ERROR: timeseries.h5 missing for frame $FRAME"
-        exit 1
-    fi
     echo "  ✓ Frame $FRAME"
+    PULLED=$((PULLED + 1))
 done
+
+echo "Pulled $PULLED frames for decomposition"
+
+if [ "$PULLED" -eq 0 ]; then
+    echo "ERROR: no frames available for decomposition"
+    exit 1
+fi
 
 # ── Run decomposition ─────────────────────────────────────────
 echo ""
@@ -61,6 +73,7 @@ echo "--- Running decomposition ---"
 apptainer exec \
     --bind "$REPO:/repo" \
     --bind "$SCRATCH:/work" \
+    --env XDG_CACHE_HOME=/work/cache \
     "$SIF" \
     $PYTHON /repo/src/transboundary_opera/run_decomposition.py \
         --aquifer-dir "/work/$AQUIFER"
@@ -76,7 +89,7 @@ if [ -n "$DEFO_FILES" ]; then
         echo "  Uploaded: $FNAME"
     done
 else
-    echo "No decomposition files produced (single-pass aquifer)."
+    echo "No decomposition output files found (single-pass or no overlapping pairs)"
 fi
 
 rm -rf "$SCRATCH"
