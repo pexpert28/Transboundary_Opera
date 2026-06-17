@@ -172,7 +172,12 @@ def _clip_geometry_to_frame(frame_nc: Path, geom_dir: Path) -> None:
 def _set_reference_point(mintpy_dir: str) -> None:
     """Find the highest-coherence pixel and write REF attrs into HDF5 files."""
     with h5py.File(f"{mintpy_dir}/geometryGeo.h5", "r") as geom:
-        epsg = dict(geom.attrs)["EPSG"]
+        gattrs = dict(geom.attrs)
+    epsg = gattrs["EPSG"]
+    x_first = float(gattrs["X_FIRST"])
+    y_first = float(gattrs["Y_FIRST"])
+    x_step = float(gattrs["X_STEP"])
+    y_step = float(gattrs["Y_STEP"])
     transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
 
     with xr.open_dataset(
@@ -180,12 +185,13 @@ def _set_reference_point(mintpy_dir: str) -> None:
     ) as coh_ds:
         coh_ds = coh_ds.rename({"phony_dim_0": "y", "phony_dim_1": "x"})
         coherence = coh_ds["avgSpatialCoh"].values
-        max_flat_idx = int(np.nanargmax(coherence))
-        y_idx, x_idx = np.unravel_index(max_flat_idx, coherence.shape)
+    
+    max_flat_idx = int(np.nanargmax(coherence))
+    y_idx, x_idx = np.unravel_index(max_flat_idx, coherence.shape)
 
-        y_coord = float(coh_ds["y"].isel(y=y_idx).values)
-        x_coord = float(coh_ds["x"].isel(x=x_idx).values)
-
+    x_coord = x_first + (x_idx + 0.5) * x_step
+    y_coord = y_first + (y_idx + 0.5) * y_step
+    
     _cleanup(coherence)
 
     ref_lon, ref_lat = transformer.transform(x_coord, y_coord)
