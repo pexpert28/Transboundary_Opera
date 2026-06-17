@@ -189,8 +189,8 @@ def _set_reference_point(mintpy_dir: str) -> None:
     max_flat_idx = int(np.nanargmax(coherence))
     y_idx, x_idx = np.unravel_index(max_flat_idx, coherence.shape)
 
-    x_coord = x_first + (x_idx + 0.5) * x_step
-    y_coord = y_first + (y_idx + 0.5) * y_step
+    x_coord = x_first + x_idx * x_step
+    y_coord = y_first + y_idx * y_step
     
     _cleanup(coherence)
 
