@@ -56,6 +56,14 @@ COHERENCE_THRESHOLD = 0.7
 BORDER_PIXELS = 0.3
 RELIABILITY_THRESHOLD = 0.7
 
+# When True, write a self-contained (non-virtual) timeseries.h5 so it survives
+# the upload/download round-trip to Allas object storage. A virtual file is just
+# a pointer to its displacement source; if it is uploaded without that source,
+# reads return NaN/0 on the decomposition node while the metadata survives --
+# the exact "data empty but reference points present" failure. Set MATERIALIZE_TS=0
+# to keep the lighter virtual file for purely in-place local runs.
+MATERIALIZE_TIMESERIES = os.environ.get("MATERIALIZE_TS", "1") == "1"
+
 MAX_RETRIES = 3
 RETRY_DELAY = 10  # seconds (base; doubles each attempt)
 
@@ -172,7 +180,12 @@ def _clip_geometry_to_frame(frame_nc: Path, geom_dir: Path) -> None:
 def _set_reference_point(mintpy_dir: str) -> None:
     """Find the highest-coherence pixel and write REF attrs into HDF5 files."""
     with h5py.File(f"{mintpy_dir}/geometryGeo.h5", "r") as geom:
-        epsg = dict(geom.attrs)["EPSG"]
+        gattrs = dict(geom.attrs)
+    epsg = gattrs["EPSG"]
+    x_first = float(gattrs["X_FIRST"])
+    y_first = float(gattrs["Y_FIRST"])
+    x_step = float(gattrs["X_STEP"])
+    y_step = float(gattrs["Y_STEP"])
     transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
 
     with xr.open_dataset(
@@ -180,11 +193,12 @@ def _set_reference_point(mintpy_dir: str) -> None:
     ) as coh_ds:
         coh_ds = coh_ds.rename({"phony_dim_0": "y", "phony_dim_1": "x"})
         coherence = coh_ds["avgSpatialCoh"].values
-        max_flat_idx = int(np.nanargmax(coherence))
-        y_idx, x_idx = np.unravel_index(max_flat_idx, coherence.shape)
 
-        y_coord = float(coh_ds["y"].isel(y=y_idx).values)
-        x_coord = float(coh_ds["x"].isel(x=x_idx).values)
+    max_flat_idx = int(np.nanargmax(coherence))
+    y_idx, x_idx = np.unravel_index(max_flat_idx, coherence.shape)
+
+    x_coord = x_first + x_idx * x_step
+    y_coord = y_first + y_idx * y_step
 
     _cleanup(coherence)
 
@@ -204,6 +218,25 @@ def _set_reference_point(mintpy_dir: str) -> None:
         print(
             f"    REF_LAT={attrs['REF_LAT']:.6f}  REF_LON={attrs['REF_LON']:.6f}  "
             f"REF_Y={attrs['REF_Y']}  REF_X={attrs['REF_X']}"
+        )
+
+
+def _validate_timeseries(mintpy_dir: Path) -> None:
+    """Check the just-written timeseries.h5 for the empty / broken-virtual-link
+    signature, and warn loudly before it is ever uploaded. Non-fatal: never
+    blocks processing if the checker is unavailable."""
+    try:
+        from transboundary_opera.ts_integrity import inspect_timeseries
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [4b] integrity check skipped ({exc})")
+        return
+
+    rep = inspect_timeseries(mintpy_dir / "timeseries.h5")
+    print("  [4b] timeseries integrity: " + rep.one_line())
+    if not rep.ok:
+        print(
+            "       WARNING: timeseries looks empty / virtual-broken. Do NOT "
+            "upload as-is -- reads will be NaN on another node. See ts_integrity.py."
         )
 
 
@@ -288,10 +321,15 @@ def process_frame(
         dem_path=None,
         layover_shadow_mask_path=geom_dir / "layover_shadow_mask.tif",
         outdir=out_path / "mintpy",
-        virtual=True,
+        # virtual=False by default so timeseries.h5 is self-contained and survives
+        # the Allas round-trip. See MATERIALIZE_TIMESERIES above.
+        virtual=not MATERIALIZE_TIMESERIES,
         reliability_threshold=RELIABILITY_THRESHOLD,
     )
     gc.collect()
+
+    # 4b. Validate the timeseries before relying on / uploading it.
+    _validate_timeseries(out_path / "mintpy")
 
     # 5. Set reference point
     print("  [5/5] Setting reference point from coherence ...")

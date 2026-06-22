@@ -75,7 +75,24 @@ def main(iargs=None):
     print(f"Found {len(ts_files)} timeseries file(s) under {aquifer_dir}")
     for f in sorted(ts_files):
         print(f"  {f}")
-
+    # ── Integrity check: catch broken virtual links after the Allas round-trip ──
+    from transboundary_opera.ts_integrity import inspect_timeseries
+    print("\nChecking timeseries integrity...")
+    broken = []
+    for f in sorted(ts_files):
+        rep = inspect_timeseries(f)
+        print("  " + rep.one_line())
+        for rec, _cand, exists in rep.sources:
+            if not exists:
+                print(f"    -> source NOT present on this node: {rec}")
+        if not rep.ok:
+            broken.append(rep)
+    if broken:
+        print(f"\nERROR: {len(broken)}/{len(ts_files)} timeseries file(s) are empty/unusable.")
+        print("Signature: timeseries.h5 is a virtual link uploaded without its")
+        print("displacement source, so reads return NaN/0. Reprocess those frames")
+        print("with a materialized (virtual=False) timeseries. See ts_integrity.py.")
+        sys.exit(3)
     # Import after validation to keep error messages clean
     from transboundary_opera.decomposition_tools import get_asc_desc_pairs
     from transboundary_opera.decomposer import InSARDecomposer
