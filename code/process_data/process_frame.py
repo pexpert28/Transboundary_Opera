@@ -200,6 +200,9 @@ def _set_reference_point(mintpy_dir: str) -> None:
     x_coord = x_first + x_idx * x_step
     y_coord = y_first + y_idx * y_step
 
+    x_coord = x_first + x_idx * x_step
+    y_coord = y_first + y_idx * y_step
+    
     _cleanup(coherence)
 
     ref_lon, ref_lat = transformer.transform(x_coord, y_coord)
