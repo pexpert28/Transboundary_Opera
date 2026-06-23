@@ -76,7 +76,20 @@ echo "Earthdata credentials staged for: $EARTHDATA_USER"
 # Bind-mount the staged .netrc over the home directory's .netrc inside container
 # This makes it visible to asf_search (process_frame.py static download)
 HOME_NETRC="/users/$USER/.netrc"
+#
+# OPTIONAL (enables the in-frame [4b] ts_integrity check):
+# bind the live package over the container's installed copy so the new
+# ts_integrity.py is importable. Confirm the destination path first with:
+#   apptainer exec "$SIF" "$PYTHON_CONTAINER" -c \
+#     "import transboundary_opera, os; print(os.path.dirname(transboundary_opera.__file__))"
+# then uncomment and set PKG_DST below. The job runs fine without this; the
+# [4b] check is wrapped and simply skips if the module isn't importable.
+# PKG_DST="/transboundary_opera/.pixi/envs/operaapp/lib/python3.11/site-packages/transboundary_opera"
+# PKG_BIND="--bind $REPO/src/transboundary_opera:$PKG_DST"
+PKG_BIND=""
+
 APPTAINER_ARGS="--bind $REPO:/repo \
+    $PKG_BIND \
     --bind $SCRATCH:/work \
     --bind $NETRC_SCRATCH:$HOME_NETRC:ro \
     --env XDG_CACHE_HOME=/work/cache \
@@ -115,6 +128,7 @@ echo "Disk after download: $(du -sh $SCRATCH/data | cut -f1)"
 # ── Step 2: Process with process_frame.py (inside container) ──
 echo ""
 echo "--- Step 2/2: Processing with process_frame.py (container) ---"
+set +e
 apptainer exec $APPTAINER_ARGS "$SIF" \
     $PYTHON_CONTAINER /repo/code/process_data/process_frame.py \
         --data-dir   "/work/data" \
@@ -122,6 +136,17 @@ apptainer exec $APPTAINER_ARGS "$SIF" \
         --frame      "$FRAME_ID" \
         --start-date "$START_DATE" \
         --end-date   "$END_DATE"
+PROCESS_EXIT=$?
+set -e
+
+if [ "$PROCESS_EXIT" -eq 2 ]; then
+    echo "Frame $FRAME_ID: no usable data (e.g. all-NaN coherence) — skipping gracefully."
+    rm -rf "$SCRATCH"
+    exit 0
+elif [ "$PROCESS_EXIT" -ne 0 ]; then
+    echo "ERROR: process_frame failed with exit code $PROCESS_EXIT"
+    exit 1
+fi
 
 # ── Verify outputs ────────────────────────────────────────────
 echo ""

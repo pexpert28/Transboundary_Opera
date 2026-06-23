@@ -67,6 +67,20 @@ MATERIALIZE_TIMESERIES = os.environ.get("MATERIALIZE_TS", "1") == "1"
 MAX_RETRIES = 3
 RETRY_DELAY = 10  # seconds (base; doubles each attempt)
 
+# Exit code used to signal "frame ran fine but has no usable data" -- a graceful
+# skip, NOT a failure. Matches download_frame.py's convention (0 ok / 2 skip /
+# 1 error) so frame_job.sh can treat it the same way and the afterok dependency
+# for decomposition survives.
+EXIT_NO_DATA = 2
+
+
+class NoValidDataError(Exception):
+    """Raised when a frame has no usable data to produce a reference point.
+
+    Degenerate frames (e.g. a thin sliver whose avgSpatialCoh is entirely NaN)
+    are expected and should be skipped, not crash the pipeline.
+    """
+
 
 # Helpers
 def _cleanup(*objs) -> None:
@@ -194,15 +208,21 @@ def _set_reference_point(mintpy_dir: str) -> None:
         coh_ds = coh_ds.rename({"phony_dim_0": "y", "phony_dim_1": "x"})
         coherence = coh_ds["avgSpatialCoh"].values
 
+    # A degenerate frame (e.g. a thin sliver) can have an entirely-NaN coherence
+    # field. np.nanargmax would raise "All-NaN slice encountered" and crash the
+    # job; instead, signal a graceful skip so the pipeline drops just this frame.
+    if not np.isfinite(coherence).any():
+        _cleanup(coherence)
+        raise NoValidDataError(
+            "avgSpatialCoh has no finite pixels -- cannot set a reference point"
+        )
+
     max_flat_idx = int(np.nanargmax(coherence))
     y_idx, x_idx = np.unravel_index(max_flat_idx, coherence.shape)
 
     x_coord = x_first + x_idx * x_step
     y_coord = y_first + y_idx * y_step
 
-    x_coord = x_first + x_idx * x_step
-    y_coord = y_first + y_idx * y_step
-    
     _cleanup(coherence)
 
     ref_lon, ref_lat = transformer.transform(x_coord, y_coord)
@@ -265,8 +285,7 @@ def process_frame(
     # Locate NetCDF inputs
     nc_files = sorted(out_path.glob("*/*.nc"))
     if not nc_files:
-        print(f"  No NetCDF files found -- skipping.")
-        return
+        raise NoValidDataError("no NetCDF inputs found for this frame")
 
     #  1. Reformat stack
     print("  [1/5] Reformatting displacement stack ...")
@@ -392,13 +411,20 @@ def main() -> None:
     print(f" Aquifer: {args.aquifer}  |  Frame: {args.frame}")
     print(f"{'=' * 72}")
 
-    process_frame(
-        data_dir=args.data_dir,
-        aquifer=args.aquifer,
-        frame=args.frame,
-        start_date=args.start_date,
-        end_date=args.end_date,
-    )
+    try:
+        process_frame(
+            data_dir=args.data_dir,
+            aquifer=args.aquifer,
+            frame=args.frame,
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
+    except NoValidDataError as exc:
+        # Graceful skip: frame has no usable data. Exit 2 so frame_job.sh can
+        # treat it like download_frame.py's no-overlap skip and NOT fail the
+        # afterok dependency chain.
+        print(f"  Skipping frame {args.frame}: {exc}")
+        sys.exit(EXIT_NO_DATA)
 
 
 if __name__ == "__main__":
