@@ -40,9 +40,9 @@ slurm:
   decompose_job:
     partition: "small"
     cpus: 8
-    mem: "240G"
+    mem: "200G"
     time: "24:00:00"
-    nvme_gb: 600        # pulls every frame's timeseries.h5 (~10GB each at full range)
+    nvme_gb: 600
 
   cog_job:
     partition: "small"
