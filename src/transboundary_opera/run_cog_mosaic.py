@@ -42,6 +42,12 @@ import numpy as np
 # Heavy geo deps are imported lazily inside functions so that --help and import
 # work even where the full stack isn't installed.
 
+# NoData value written to the COGs. -9999.0 is unambiguously outside the valid
+# velocity range (m/yr, ~±0.1) and is more portable across GIS software than NaN.
+# It is DECLARED on the raster (not just written), so GDAL excludes it from
+# overview building and downstream statistics.
+NODATA = -9999.0
+
 
 # ── Product registry ──────────────────────────────────────────────────────────
 # A product describes one mosaic to build. Velocity is implemented now. When the
@@ -180,11 +186,20 @@ def _write_cog(mosaic, out_path: Path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(suffix=".tif", dir=str(out_path.parent))
     os.close(fd)
+
+    # NaN is used internally (reproject/merge/clip handle it correctly as a gap);
+    # convert to the declared NODATA sentinel only at write time. Declaring it
+    # matters: otherwise GDAL averages -9999 into real values when building
+    # overviews and computing statistics.
+    out = mosaic.fillna(NODATA)
+    out = out.rio.write_nodata(NODATA, encoded=False)
+
     try:
-        mosaic.rio.to_raster(
+        out.rio.to_raster(
             tmp,
             driver="COG",
             dtype="float32",
+            nodata=NODATA,
             compress="DEFLATE",
             num_threads="all_cpus",
             overview_resampling="average",
